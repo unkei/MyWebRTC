@@ -7,6 +7,10 @@ import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 
+import com.github.nkzawa.emitter.Emitter;
+import com.github.nkzawa.socketio.client.IO;
+import com.github.nkzawa.socketio.client.Socket;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.webrtc.AudioSource;
@@ -29,11 +33,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.List;
-
-import de.tavendo.autobahn.WebSocket;
-import de.tavendo.autobahn.WebSocket.WebSocketConnectionObserver;
-import de.tavendo.autobahn.WebSocketConnection;
-import de.tavendo.autobahn.WebSocketException;
 
 
 public class MainActivity extends ActionBarActivity {
@@ -130,7 +129,7 @@ public class MainActivity extends ActionBarActivity {
     private MediaConstraints mediaConstraints;
     private SDPObserver sdpObserver = new SDPObserver();
 
-    private WebSocketConnection ws;
+    private Socket mSocket;
     private String wsServerUrl;
     private boolean peerStarted = false;
 
@@ -149,7 +148,7 @@ public class MainActivity extends ActionBarActivity {
 
     private void connect() {
 //        sigConnect("ws://10.54.36.19:9001/");
-        sigConnect("ws://unwebrtc.herokuapp.com/");
+        sigConnect("http://unwebrtc.herokuapp.com/");
     }
 
     private void hangUp() {
@@ -307,28 +306,29 @@ public class MainActivity extends ActionBarActivity {
     private void sigConnect(final String wsUrl) {
         wsServerUrl = wsUrl;
 
-        ws = new WebSocketConnection();
         try {
-            ws.connect(new URI(wsServerUrl), new WebSocketConnectionObserver() {
+            mSocket = IO.socket(wsServerUrl);
+
+            mSocket.on("connect", new Emitter.Listener() {
                 @Override
-                public void onOpen() {
+                public void call(Object... args) {
                     Log.d(TAG, "WebSocket connection opened to: " + wsServerUrl);
                 }
-
+            });
+            mSocket.on("disconnect", new Emitter.Listener() {
                 @Override
-                public void onClose(WebSocketCloseNotification code, String reason) {
-                    Log.d(TAG, "WebSocket connection closed. Code: " + code + ". Reason: " + reason);
+                public void call(Object... args) {
+                    Log.d(TAG, "WebSocket connection closed.");
                 }
-
+            });
+            mSocket.on("message", new Emitter.Listener() {
                 @Override
-                public void onTextMessage(String payload) {
-                    Log.d(TAG, "WSS->C: " + payload);
+                public void call(Object... args) {
 
-                    // from WebSocketChannelEvents::onWebSocketMessage()
-                    String msg = payload;
                     try {
-                        if (msg != null && msg.length() > 0) {
-                            JSONObject json = new JSONObject(msg);
+                        if (args.length > 0) {
+                            JSONObject json = (JSONObject)(args[0]);
+                            Log.d(TAG, "WSS->C: " + json);
                             String type = json.optString("type");
                             if (type.equals("offer")) {
                                 Log.i(TAG, "Received offer, set offer, sending answer....");
@@ -354,34 +354,25 @@ public class MainActivity extends ActionBarActivity {
                                 Log.i(TAG, "disconnected");
                                 stop();
                             } else {
-                                Log.e(TAG, "Unexpected WebSocket message: " + msg);
+                                Log.e(TAG, "Unexpected WebSocket message: " + args[0]);
                             }
                         } else {
-                            Log.e(TAG, "Unexpected WebSocket message: " + msg);
+                            Log.e(TAG, "Unexpected WebSocket message: " + args[0]);
                         }
                     } catch (JSONException e) {
-                        Log.e(TAG, "WebSocket message JSON parsing error: " + e.toString() + " msg=" + msg);
+                        Log.e(TAG, "WebSocket message JSON parsing error: " + e.toString() + " args[0]=" + args[0]);
                     }
                 }
-
-                @Override
-                public void onRawTextMessage(byte[] payload) {
-                }
-
-                @Override
-                public void onBinaryMessage(byte[] payload) {
-                }
             });
+            mSocket.connect();
             peerStarted = true;
         } catch (URISyntaxException e) {
             Log.e(TAG, "URI error: " + e.getMessage());
-        } catch (WebSocketException e) {
-            Log.e(TAG, "WebSocket connection error: " + e.getMessage());
         }
     }
 
     private void sigSend(final JSONObject jsonObject) {
-        ws.sendTextMessage(jsonObject.toString());
+        mSocket.send(jsonObject);
     }
 
     // Put a |key|->|value| mapping in |json|.
