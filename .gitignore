@@ -1,72 +1,7 @@
-## Android stuff
-# built application files
-*.apk
-*.ap_
-
-# files for the dex VM
-*.dex
-
-# Java class files
-*.class
-
-# generated files
-bin/
-gen/
-google_play_services/
-test/reports/
-
-# Local configuration file (sdk path, etc)
-local.properties
-
-## Eclipse stuff
-*.pydevproject
-.project
-.metadata
-bin/**
-tmp/**
-tmp/**/*
-*.tmp
-*.bak
-*.swp
-*~.nib
-local.properties
-.classpath
-.settings/
-.loadpath
-
-## Android studio stuff
-.idea/*
-config/*
-out/*
-*.iml
-lib-revision.txt
-
-# External tool builders
-.externalToolBuilders/
-
-# Locally stored "Eclipse launch configurations"
-*.launch
-
-# CDT-specific
-.cproject
-
-# PDT-specific
-.buildpath
-
-## Connected Driving stuff
-docs/**
-libs/**
-
-## gradle build files
-build/**
-.gradle/**
-
+.gradle
+/local.properties
+/.idea/workspace.xml
+/.idea/libraries
 .DS_Store
-
-#CompanionApp generated sources
-generatedSrc/**
-
-#old performance logs
-e2e-tests/charts/data_archive/**
-e2e-tests/charts/data.txt
-e2e-tests/charts/js/data_json.js
+/build
+/app/build
