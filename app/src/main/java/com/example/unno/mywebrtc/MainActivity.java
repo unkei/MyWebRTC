@@ -43,6 +43,12 @@ public class MainActivity extends ActionBarActivity {
     private String AUDIO_TRACK_ID = TAG + "AUDIO";
     private String LOCAL_MEDIA_STREAM_ID = TAG + "STREAM";
     private MediaStream mediaStream;
+    private VideoTrack localVideoTrack;
+    private AudioTrack localAudioTrack;
+    private VideoTrack remoteVideoTrack;
+    private AudioTrack remoteAudioTrack;
+    private VideoRenderer renderer;
+    private VideoRenderer renderer_sub;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,30 +66,25 @@ public class MainActivity extends ActionBarActivity {
         VideoCapturerAndroid capturer = VideoCapturerAndroid.create(nameOfFrontFacingDevice);
 
         MediaConstraints videoConstraints = new MediaConstraints();
-//        MediaConstraints audioConstraints = new MediaConstraints();
+        MediaConstraints audioConstraints = new MediaConstraints();
         VideoSource videoSource = peerConnectionFactory.createVideoSource(capturer, videoConstraints);
-        VideoTrack localVideoTrack = peerConnectionFactory.createVideoTrack(VIDEO_TRACK_ID, videoSource);
-//        AudioSource audioSource = peerConnectionFactory.createAudioSource(audioConstraints);
-//        AudioTrack localAudioTrack = peerConnectionFactory.createAudioTrack(AUDIO_TRACK_ID, audioSource);
+        localVideoTrack = peerConnectionFactory.createVideoTrack(VIDEO_TRACK_ID, videoSource);
+        AudioSource audioSource = peerConnectionFactory.createAudioSource(audioConstraints);
+        localAudioTrack = peerConnectionFactory.createAudioTrack(AUDIO_TRACK_ID, audioSource);
 
         glview = (GLSurfaceView) findViewById(R.id.glview);
-        VideoRendererGui.setView(glview, new Runnable() {
-            @Override
-            public void run() {
-
-            }
-        });
+        VideoRendererGui.setView(glview, null);
         try {
-            VideoRenderer renderer = VideoRendererGui.createGui(0, 0, 100, 100, VideoRendererGui.ScalingType.SCALE_ASPECT_FILL, true);
-            localVideoTrack.addRenderer(renderer);
+            renderer = VideoRendererGui.createGui(0, 0, 100, 100, VideoRendererGui.ScalingType.SCALE_ASPECT_FILL, true);
+            renderer_sub = VideoRendererGui.createGui(72, 72, 25, 25, VideoRendererGui.ScalingType.SCALE_ASPECT_FILL, true);
+            localVideoTrack.addRenderer(renderer_sub);
         } catch (Exception e) {
             e.printStackTrace();
         }
 
-
         mediaStream = peerConnectionFactory.createLocalMediaStream(LOCAL_MEDIA_STREAM_ID);
         mediaStream.addTrack(localVideoTrack);
-//        mediaStream.addTrack(localAudioTrack);
+        mediaStream.addTrack(localAudioTrack);
     }
 
     @Override
@@ -121,7 +122,7 @@ public class MainActivity extends ActionBarActivity {
     }
 
     // webrtc
-    PeerConnectionFactory peerConnectionFactory;
+    private PeerConnectionFactory peerConnectionFactory;
     private PeerConnection peerConnection;
     private MediaConstraints pcConstraints;
     private MediaConstraints videoConstraints;
@@ -134,7 +135,7 @@ public class MainActivity extends ActionBarActivity {
     private boolean peerStarted = false;
 
     private void initWebRTC() {
-        PeerConnectionFactory.initializeAndroidGlobals(this, true, true, true, true);
+        PeerConnectionFactory.initializeAndroidGlobals(this, true, true, true, VideoRendererGui.getEGLContext());
 
         peerConnectionFactory = new PeerConnectionFactory();
 
@@ -201,13 +202,25 @@ public class MainActivity extends ActionBarActivity {
             }
 
             @Override
-            public void onAddStream(MediaStream mediaStream) {
-
+            public void onAddStream(MediaStream stream) {
+                if (MainActivity.this.peerConnection == null) {
+                    return;
+                }
+                if (stream.audioTracks.size() > 1 || stream.videoTracks.size() > 1) {
+                    Log.e(TAG, "Weird-looking stream: " + stream);
+                    return;
+                }
+                if (stream.videoTracks.size() == 1) {
+                    remoteVideoTrack = stream.videoTracks.get(0);
+//                    remoteVideoTrack.setEnabled(true);
+                    remoteVideoTrack.addRenderer(MainActivity.this.renderer);
+                }
             }
 
             @Override
-            public void onRemoveStream(MediaStream mediaStream) {
-
+            public void onRemoveStream(MediaStream stream) {
+                remoteVideoTrack = null;
+                stream.videoTracks.get(0).dispose();
             }
 
             @Override
