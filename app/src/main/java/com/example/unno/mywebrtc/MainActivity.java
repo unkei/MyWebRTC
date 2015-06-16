@@ -55,8 +55,9 @@ public class MainActivity extends ActionBarActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+//        sigConnect("http://10.54.36.19:8000/");
+        sigConnect("http://unwebrtc.herokuapp.com/");
         initWebRTC();
-        connect();
 
         Log.i(TAG, "VideoCapturerAndroid.getDeviceCount() = " + VideoCapturerAndroid.getDeviceCount());
         String nameOfFrontFacingDevice = VideoCapturerAndroid.getNameOfFrontFacingDevice();
@@ -113,12 +114,20 @@ public class MainActivity extends ActionBarActivity {
         // as you specify a parent activity in AndroidManifest.xml.
         int id = item.getItemId();
 
-        //noinspection SimplifiableIfStatement
-        if (id == R.id.action_settings) {
-            return true;
+        boolean ret = true;
+        switch (id) {
+            case R.id.action_call:
+                connect();
+                break;
+            case R.id.action_hangup:
+                hangUp();
+                break;
+            default:
+                ret = super.onOptionsItemSelected(item);
+                break;
         }
 
-        return super.onOptionsItemSelected(item);
+        return ret;
     }
 
     // webrtc
@@ -148,11 +157,14 @@ public class MainActivity extends ActionBarActivity {
     }
 
     private void connect() {
-//        sigConnect("ws://10.54.36.19:9001/");
-        sigConnect("http://unwebrtc.herokuapp.com/");
+        if (!peerStarted) {
+            sendOffer();
+            peerStarted = true;
+        }
     }
 
     private void hangUp() {
+        sendDisconnect();
         stop();
     }
 
@@ -242,6 +254,7 @@ public class MainActivity extends ActionBarActivity {
     private void onOffer(final SessionDescription sdp) {
         setOffer(sdp);
         sendAnswer();
+        peerStarted = true;
     }
 
     private void onAnswer(final SessionDescription sdp) {
@@ -287,6 +300,12 @@ public class MainActivity extends ActionBarActivity {
             return;
         }
         peerConnection.setRemoteDescription(sdpObserver, sdp);
+    }
+
+    private void sendDisconnect() {
+        JSONObject json = new JSONObject();
+        jsonPut(json, "type", "user disconnected");
+        sigSend(json);
     }
 
     private class SDPObserver implements SdpObserver {
@@ -378,7 +397,6 @@ public class MainActivity extends ActionBarActivity {
                 }
             });
             mSocket.connect();
-            peerStarted = true;
         } catch (URISyntaxException e) {
             Log.e(TAG, "URI error: " + e.getMessage());
         }
