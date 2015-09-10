@@ -1,11 +1,14 @@
 package com.example.unno.mywebrtc;
 
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.opengl.GLSurfaceView;
 import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.widget.EditText;
 
 import com.github.nkzawa.emitter.Emitter;
 import com.github.nkzawa.socketio.client.IO;
@@ -49,6 +52,7 @@ public class MainActivity extends ActionBarActivity {
     private AudioTrack remoteAudioTrack;
     private VideoRenderer renderer;
     private VideoRenderer renderer_sub;
+    private String roomName;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -122,12 +126,42 @@ public class MainActivity extends ActionBarActivity {
             case R.id.action_hangup:
                 hangUp();
                 break;
+            case R.id.action_room:
+                showRoomDialog();
+                break;
             default:
                 ret = super.onOptionsItemSelected(item);
                 break;
         }
 
         return ret;
+    }
+
+    private void showRoomDialog() {
+        final EditText editView = new EditText(this);
+        editView.setText(roomName);
+        new AlertDialog.Builder(this)
+                .setIcon(android.R.drawable.ic_dialog_info)
+                .setTitle("Enter room name")
+                .setView(editView)
+                .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int whichButton) {
+                        roomName = editView.getText().toString();
+                        hangUp();
+                        sigReconnect();
+                    }
+                })
+                .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int whichButton) {
+                    }
+                })
+                .show();
+    }
+
+    private String getRoomName() {
+        return (roomName == null || roomName.isEmpty())?
+                "_defaultroom":
+                roomName;
     }
 
     // webrtc
@@ -169,9 +203,11 @@ public class MainActivity extends ActionBarActivity {
     }
 
     private void stop() {
-        peerConnection.close();
-        peerConnection = null;
-        peerStarted = false;
+        if (peerConnection != null) {
+            peerConnection.close();
+            peerConnection = null;
+            peerStarted = false;
+        }
     }
     // connection handling
     private PeerConnection prepareNewConnection() {
@@ -345,6 +381,7 @@ public class MainActivity extends ActionBarActivity {
                 @Override
                 public void call(Object... args) {
                     Log.d(TAG, "WebSocket connection opened to: " + wsServerUrl);
+                    sigEnter();
                 }
             });
             mSocket.on("disconnect", new Emitter.Listener() {
@@ -400,6 +437,15 @@ public class MainActivity extends ActionBarActivity {
         } catch (URISyntaxException e) {
             Log.e(TAG, "URI error: " + e.getMessage());
         }
+    }
+
+    private void sigReconnect() {
+        mSocket.disconnect();
+        mSocket.connect();
+    }
+
+    private void sigEnter() {
+        mSocket.emit("enter", getRoomName());
     }
 
     private void sigSend(final JSONObject jsonObject) {

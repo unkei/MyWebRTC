@@ -5,3 +5,7 @@
 .DS_Store
 /build
 /app/build
+
+.idea/
+*.iml
+
