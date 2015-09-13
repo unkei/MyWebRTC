@@ -2,7 +2,9 @@ package com.example.unno.mywebrtc;
 
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.net.Uri;
 import android.opengl.GLSurfaceView;
+import android.os.AsyncTask;
 import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
 import android.util.Log;
@@ -10,10 +12,18 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.EditText;
 
-import com.github.nkzawa.emitter.Emitter;
-import com.github.nkzawa.socketio.client.IO;
-import com.github.nkzawa.socketio.client.Socket;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.ResponseHandler;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.util.EntityUtils;
+import org.java_websocket.WebSocketImpl;
+import org.java_websocket.client.DefaultSSLWebSocketClientFactory;
+import org.java_websocket.client.WebSocketClient;
 
+import org.java_websocket.drafts.Draft_17;
+import org.java_websocket.handshake.ServerHandshake;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.webrtc.AudioSource;
@@ -32,13 +42,98 @@ import org.webrtc.VideoRendererGui;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
+
+import javax.net.ssl.SSLContext;
 
 
 public class MainActivity extends ActionBarActivity {
+
+    class WsOptions {
+        private final static boolean DEFAULT_SECURE = true;
+        // cilent page http://peerclient-rhj-001.herokuapp.com
+        private final static String  DEFAULT_HOST   = "peerserver-rhj-001.herokuapp.com";
+//        private final static String  DEFAULT_HOST   = "unpeerjs.herokuapp.com";
+        private final static int     DEFAULT_PORT   = 443;
+        private final static String  DEFAULT_PATH   = "/";
+        private final static String  DEFAULT_KEY    = "peerjs";
+//        private final static boolean DEFAULT_SECURE = false;
+//        private final static String  DEFAULT_HOST   = "10.54.36.20";
+//        private final static int     DEFAULT_PORT   = 9000;
+//        private final static String  DEFAULT_PATH   = "/";
+//        private final static String  DEFAULT_KEY    = "peerjs";
+
+        boolean mSecure;
+        String  mHost;
+        int     mPort;
+        String  mPath;
+        String  mKey;
+        String  mClientId;
+        String  mTargetId = "xxx";
+        String  mToken;
+
+        public WsOptions() {
+            this(DEFAULT_SECURE, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_PATH, DEFAULT_KEY);
+        }
+
+        public WsOptions(boolean secure, String host, int port, String path, String key) {
+            mSecure = secure;
+            mHost = host;
+            mPort = port;
+            mPath = path;
+            mKey  = key;
+            mToken = randomString();
+        }
+
+        private String randomString() {
+            Random random = new Random();
+            return String.valueOf(random.nextInt(Integer.MAX_VALUE));
+        }
+
+        public String getClientId() {
+            return mClientId;
+        }
+
+        public void setClientId(String clientId) {
+            mClientId = clientId;
+        }
+
+        public String getTargetId() {
+            return mTargetId;
+        }
+
+        public void setTargetId(String targetId) {
+            mTargetId = targetId;
+        }
+
+        public String getClientIdUri() {
+            Uri.Builder builder = new Uri.Builder();
+            builder.scheme(mSecure ? "https" : "http");
+            builder.encodedAuthority(mHost + ":" + mPort);
+            builder.path(mPath + mKey + "/id");
+
+            return builder.build().toString();
+        }
+
+        public String getWsServerUri() {
+            Uri.Builder builder = new Uri.Builder();
+            builder.scheme(mSecure ? "wss" : "ws");
+            builder.encodedAuthority(mHost + ":" + mPort);
+            builder.path(mPath + "peerjs");
+            builder.appendQueryParameter("key", mKey);
+            builder.appendQueryParameter("id", mClientId);
+            builder.appendQueryParameter("token", mToken);
+
+            return builder.build().toString();
+        }
+    }
 
     private String TAG = MainActivity.class.getSimpleName();
     private GLSurfaceView glview;
@@ -53,14 +148,24 @@ public class MainActivity extends ActionBarActivity {
     private VideoRenderer renderer;
     private VideoRenderer renderer_sub;
     private String roomName;
+    private String connectionId = "pc_abc";
+
+    private final static String clientIdURIformat = "%s://%s:%d%s/%s/id";
+    private WsOptions wsOptions;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-//        sigConnect("http://10.54.36.19:8000/");
-        sigConnect("http://unwebrtc.herokuapp.com/");
+        wsOptions = new WsOptions();
+        getClientId(wsOptions, new ClientIdListener() {
+            @Override
+            public void onResponse(String clientId) {
+                wsOptions.setClientId(clientId);
+                sigConnect(wsOptions);
+            }
+        });
         initWebRTC();
 
         Log.i(TAG, "VideoCapturerAndroid.getDeviceCount() = " + VideoCapturerAndroid.getDeviceCount());
@@ -173,8 +278,8 @@ public class MainActivity extends ActionBarActivity {
     private MediaConstraints mediaConstraints;
     private SDPObserver sdpObserver = new SDPObserver();
 
-    private Socket mSocket;
-    private String wsServerUrl;
+    private WebSocketClient mSocket;
+    private URI wsServerUrl;
     private boolean peerStarted = false;
 
     private void initWebRTC() {
@@ -239,10 +344,20 @@ public class MainActivity extends ActionBarActivity {
                 if (candidate != null) {
                     Log.i(TAG, "iceCandidate: " + candidate);
                     JSONObject json = new JSONObject();
-                    jsonPut(json, "type", "candidate");
-                    jsonPut(json, "sdpMLineIndex", candidate.sdpMLineIndex);
-                    jsonPut(json, "sdpMid", candidate.sdpMid);
-                    jsonPut(json, "candidate", candidate.sdp);
+                    jsonPut(json, "type", "CANDIDATE");
+                    JSONObject JSONpayload = new JSONObject();
+                    {
+                        jsonPut(JSONpayload, "type", "media");
+                        jsonPut(JSONpayload, "connectionId", connectionId);
+                        JSONObject JSONcandidate= new JSONObject();
+                        {
+                            jsonPut(JSONcandidate, "sdpMLineIndex", candidate.sdpMLineIndex);
+                            jsonPut(JSONcandidate, "sdpMid", candidate.sdpMid);
+                            jsonPut(JSONcandidate, "candidate", candidate.sdp);
+                        }
+                        jsonPut(JSONpayload, "candidate", JSONcandidate);
+                    }
+                    jsonPut(json, "payload", JSONpayload);
                     sigSend(json);
                 } else {
                     Log.i(TAG, "End of candidates. -------------------");
@@ -303,8 +418,18 @@ public class MainActivity extends ActionBarActivity {
 
     private void sendSDP(final SessionDescription sdp) {
         JSONObject json = new JSONObject();
-        jsonPut(json, "type", sdp.type.canonicalForm());
-        jsonPut(json, "sdp", sdp.description);
+        jsonPut(json, "type", sdp.type.canonicalForm().toUpperCase());
+        JSONObject JSONpayload = new JSONObject();
+        {
+            jsonPut(JSONpayload, "connectionId", connectionId);
+            JSONObject JSONsdp = new JSONObject();
+            {
+                jsonPut(JSONsdp, "type", sdp.type.canonicalForm());
+                jsonPut(JSONsdp, "sdp", sdp.description);
+            }
+            jsonPut(JSONpayload, "sdp", JSONsdp);
+        }
+        jsonPut(json, "payload", JSONpayload);
         sigSend(json);
     }
 
@@ -340,7 +465,8 @@ public class MainActivity extends ActionBarActivity {
 
     private void sendDisconnect() {
         JSONObject json = new JSONObject();
-        jsonPut(json, "type", "user disconnected");
+//        jsonPut(json, "type", "user disconnected");
+        jsonPut(json, "type", "LEAVE");
         sigSend(json);
     }
 
@@ -371,68 +497,97 @@ public class MainActivity extends ActionBarActivity {
     }
 
     // websocket related operations
-    private void sigConnect(final String wsUrl) {
-        wsServerUrl = wsUrl;
+    private void sigConnect(WsOptions opts) {
 
         try {
-            mSocket = IO.socket(wsServerUrl);
+            wsServerUrl = new URI(opts.getWsServerUri());
+            mSocket = new WebSocketClient(wsServerUrl) {
 
-            mSocket.on("connect", new Emitter.Listener() {
                 @Override
-                public void call(Object... args) {
+                public void onOpen(ServerHandshake handshakedata) {
                     Log.d(TAG, "WebSocket connection opened to: " + wsServerUrl);
                     sigEnter();
                 }
-            });
-            mSocket.on("disconnect", new Emitter.Listener() {
-                @Override
-                public void call(Object... args) {
-                    Log.d(TAG, "WebSocket connection closed.");
-                }
-            });
-            mSocket.on("message", new Emitter.Listener() {
-                @Override
-                public void call(Object... args) {
 
+                @Override
+                public void onMessage(String message) {
                     try {
-                        if (args.length > 0) {
-                            JSONObject json = (JSONObject)(args[0]);
+                        if (message.length() > 0) {
+                            JSONObject json = new JSONObject(message);
+//                            JSONObject json = (JSONObject)(args[0]);
                             Log.d(TAG, "WSS->C: " + json);
                             String type = json.optString("type");
-                            if (type.equals("offer")) {
+//                            if (type.equals("offer")) {
+                            if (type.equals("OFFER")) {
                                 Log.i(TAG, "Received offer, set offer, sending answer....");
+                                String src = json.getString("src");
+                                if (src != null && !src.isEmpty()) {
+                                    wsOptions.setTargetId(src);
+                                }
+                                JSONObject JSONpayload = json.getJSONObject("payload");
+                                JSONObject JSONsdp = JSONpayload.getJSONObject("sdp");
                                 SessionDescription sdp = new SessionDescription(
                                         SessionDescription.Type.fromCanonicalForm(type),
-                                        json.getString("sdp"));
+                                        JSONsdp.getString("sdp"));
+                                connectionId = JSONpayload.getString("connectionId");
                                 onOffer(sdp);
-                            } else if (type.equals("answer") && peerStarted) {
+//                            } else if (type.equals("answer") && peerStarted) {
+                            } else if (type.equals("ANSWER") && peerStarted) {
                                 Log.i(TAG, "Received answer, setting answer SDP");
+                                JSONObject JSONpayload = json.getJSONObject("payload");
+                                JSONObject JSONsdp = JSONpayload.getJSONObject("sdp");
                                 SessionDescription sdp = new SessionDescription(
                                         SessionDescription.Type.fromCanonicalForm(type),
-                                        json.getString("sdp"));
+                                        JSONsdp.getString("sdp"));
                                 onAnswer(sdp);
-                            } else if (type.equals("candidate") && peerStarted) {
+//                            } else if (type.equals("candidate") && peerStarted) {
+                            } else if (type.equals("CANDIDATE") && peerStarted) {
                                 Log.i(TAG, "Received ICE candidate...");
+                                JSONObject JSONpayload = json.getJSONObject("payload");
+                                JSONObject JSONcandidate = JSONpayload.getJSONObject("candidate");
                                 IceCandidate candidate = new IceCandidate(
-                                        json.getString("sdpMid"),
-                                        json.getInt("sdpMLineIndex"),
-                                        json.getString("candidate"));
+                                        JSONcandidate.getString("sdpMid"),
+                                        JSONcandidate.getInt("sdpMLineIndex"),
+                                        JSONcandidate.getString("candidate"));
                                 onCandidate(candidate);
-                            } else if (type.equals("user disconnected") && peerStarted) {
+//                            } else if (type.equals("user disconnected") && peerStarted) {
+                            } else if (type.equals("LEAVE") && peerStarted) {
 //                            } else if (type.equals("bye") && peerStarted) {
                                 Log.i(TAG, "disconnected");
                                 stop();
                             } else {
-                                Log.e(TAG, "Unexpected WebSocket message: " + args[0]);
+                                Log.e(TAG, "Unexpected WebSocket message: " + message);
                             }
                         } else {
-                            Log.e(TAG, "Unexpected WebSocket message: " + args[0]);
+                            Log.e(TAG, "Unexpected WebSocket message: " + message);
                         }
                     } catch (JSONException e) {
-                        Log.e(TAG, "WebSocket message JSON parsing error: " + e.toString() + " args[0]=" + args[0]);
+                        Log.e(TAG, "WebSocket message JSON parsing error: " + e.toString() + " message=" + message);
                     }
                 }
-            });
+
+                @Override
+                public void onClose(int code, String reason, boolean remote) {
+                    Log.d(TAG, "WebSocket connection closed.");
+                }
+
+                @Override
+                public void onError(Exception ex) {
+
+                }
+            };
+
+            SSLContext sslContext = null;
+            try {
+                sslContext = SSLContext.getInstance("TLS");
+                sslContext.init(null, null, null); // will use java's default key and trust store which is sufficient unless you deal with self-signed certificates
+            } catch (NoSuchAlgorithmException e) {
+                e.printStackTrace();
+            } catch (KeyManagementException e) {
+                e.printStackTrace();
+            }
+            mSocket.setWebSocketFactory(new DefaultSSLWebSocketClientFactory(sslContext));
+
             mSocket.connect();
         } catch (URISyntaxException e) {
             Log.e(TAG, "URI error: " + e.getMessage());
@@ -440,16 +595,18 @@ public class MainActivity extends ActionBarActivity {
     }
 
     private void sigReconnect() {
-        mSocket.disconnect();
+        mSocket.close();
         mSocket.connect();
     }
 
     private void sigEnter() {
-        mSocket.emit("enter", getRoomName());
+//        mSocket.emit("enter", getRoomName());
     }
 
     private void sigSend(final JSONObject jsonObject) {
-        mSocket.send(jsonObject);
+        jsonPut(jsonObject, "src", wsOptions.getClientId());
+        jsonPut(jsonObject, "dst", wsOptions.getTargetId());
+        mSocket.send(jsonObject.toString());
     }
 
     // Put a |key|->|value| mapping in |json|.
@@ -459,5 +616,40 @@ public class MainActivity extends ActionBarActivity {
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    interface ClientIdListener {
+        void onResponse(String clientId);
+    }
+
+    private void getClientId(WsOptions opts, final ClientIdListener listener) {
+
+        final HttpGet request = new HttpGet(opts.getClientIdUri());
+
+        final DefaultHttpClient httpClient = new DefaultHttpClient();
+
+        AsyncTask<Void, Void, String> task = new AsyncTask<Void, Void, String>() {
+            @Override
+            protected String doInBackground(Void... params) {
+                try {
+                    HttpResponse response = httpClient.execute(request);
+                    return EntityUtils.toString(response.getEntity());
+                } catch (ClientProtocolException e) {
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(String result) {
+                super.onPostExecute(result);
+                if (listener != null) {
+                    listener.onResponse(result);
+                }
+            }
+        };
+        task.execute();
     }
 }
