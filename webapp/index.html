@@ -166,8 +166,9 @@
           });
 
           // Send messages
-          c.send('Hello!');
+          c.send('==Hello!');
         });
+        c.send('Hello!');
 
         c.on('data', function(data) {
           console.log('Received', data);

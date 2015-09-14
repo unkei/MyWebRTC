@@ -58,7 +58,7 @@ public class MainActivity extends ActionBarActivity {
 
     class WsOptions {
         private final static boolean DEFAULT_SECURE = true;
-        // cilent page http://peerclient-rhj-001.herokuapp.com
+        // cilent page http://peerclient-rhj-001.herokuapp.com or https://unwebrtc.herokuapp.com/unpeerjs
         private final static String  DEFAULT_HOST   = "peerserver-rhj-001.herokuapp.com";
 //        private final static String  DEFAULT_HOST   = "unpeerjs.herokuapp.com";
         private final static int     DEFAULT_PORT   = 443;
@@ -147,8 +147,12 @@ public class MainActivity extends ActionBarActivity {
     private AudioTrack remoteAudioTrack;
     private VideoRenderer renderer;
     private VideoRenderer renderer_sub;
+    private DataChannel rtcDataChannel;
     private String roomName;
     private String connectionId = "pc_abc";
+    private String offerType = "media";
+    private boolean isMeida() { return "media".equals(offerType); }
+    private final static String RTCDataChannelName = "RTCDataChannel";
 
     private final static String clientIdURIformat = "%s://%s:%d%s/%s/id";
     private WsOptions wsOptions;
@@ -272,6 +276,7 @@ public class MainActivity extends ActionBarActivity {
     // webrtc
     private PeerConnectionFactory peerConnectionFactory;
     private PeerConnection peerConnection;
+    private PeerConnection peerConnectionData;
     private MediaConstraints pcConstraints;
     private MediaConstraints videoConstraints;
     private MediaConstraints audioConstraints;
@@ -297,6 +302,7 @@ public class MainActivity extends ActionBarActivity {
 
     private void connect() {
         if (!peerStarted) {
+            offerType = "media";
             sendOffer();
             peerStarted = true;
         }
@@ -313,30 +319,34 @@ public class MainActivity extends ActionBarActivity {
             peerConnection = null;
             peerStarted = false;
         }
+        if (peerConnectionData != null) {
+            peerConnectionData.close();
+            peerConnectionData = null;
+        }
     }
     // connection handling
     private PeerConnection prepareNewConnection() {
         List<PeerConnection.IceServer> iceServers = new ArrayList<>();
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
-        rtcConfig.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED;
-        rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
+//        rtcConfig.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED;
+//        rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
 //        rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE;
 
-        PeerConnection peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, pcConstraints, new PeerConnection.Observer() {
+        PeerConnection peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, new MediaConstraints(), new PeerConnection.Observer() {
 
             @Override
             public void onSignalingChange(PeerConnection.SignalingState signalingState) {
-
+                Log.i(TAG, "onSignalingChange");
             }
 
             @Override
             public void onIceConnectionChange(PeerConnection.IceConnectionState iceConnectionState) {
-
+                Log.i(TAG, "onIceConnectionChange");
             }
 
             @Override
             public void onIceGatheringChange(PeerConnection.IceGatheringState iceGatheringState) {
-
+                Log.i(TAG, "onIceGatheringChange");
             }
 
             @Override
@@ -347,7 +357,7 @@ public class MainActivity extends ActionBarActivity {
                     jsonPut(json, "type", "CANDIDATE");
                     JSONObject JSONpayload = new JSONObject();
                     {
-                        jsonPut(JSONpayload, "type", "media");
+                        jsonPut(JSONpayload, "type", offerType);
                         jsonPut(JSONpayload, "connectionId", connectionId);
                         JSONObject JSONcandidate= new JSONObject();
                         {
@@ -388,16 +398,30 @@ public class MainActivity extends ActionBarActivity {
 
             @Override
             public void onDataChannel(DataChannel dataChannel) {
+                Log.i(TAG, "onDataChannel: " + dataChannel.toString());
+                rtcDataChannel = dataChannel;
+                rtcDataChannel.registerObserver(new DataChannel.Observer() {
+                    @Override
+                    public void onStateChange() {
+                        Log.i(TAG, "onStateChange");
+                    }
 
+                    @Override
+                    public void onMessage(DataChannel.Buffer buffer) {
+                        Log.i(TAG, "onMessage" + (buffer.binary? "(Binary)": "") + ":" + buffer.data.asCharBuffer());
+                    }
+                });
             }
 
             @Override
             public void onRenegotiationNeeded() {
-
+                Log.i(TAG, "onRenegotiationNeeded");
             }
         });
 
-        peerConnection.addStream(mediaStream);
+        if (isMeida()) {
+            peerConnection.addStream(mediaStream);
+        }
 
         return peerConnection;
     }
@@ -413,7 +437,11 @@ public class MainActivity extends ActionBarActivity {
     }
 
     private void onCandidate(final IceCandidate candidate) {
-        peerConnection.addIceCandidate(candidate);
+        if (isMeida()) {
+            peerConnection.addIceCandidate(candidate);
+        } else {
+            peerConnectionData.addIceCandidate(candidate);
+        }
     }
 
     private void sendSDP(final SessionDescription sdp) {
@@ -421,6 +449,8 @@ public class MainActivity extends ActionBarActivity {
         jsonPut(json, "type", sdp.type.canonicalForm().toUpperCase());
         JSONObject JSONpayload = new JSONObject();
         {
+            jsonPut(JSONpayload, "serialization", "binary");
+            jsonPut(JSONpayload, "type", offerType);
             jsonPut(JSONpayload, "connectionId", connectionId);
             JSONObject JSONsdp = new JSONObject();
             {
@@ -434,33 +464,63 @@ public class MainActivity extends ActionBarActivity {
     }
 
     private void sendOffer() {
-        peerConnection = prepareNewConnection();
-        peerConnection.createOffer(sdpObserver, mediaConstraints);
+        if (isMeida()) {
+            peerConnection = prepareNewConnection();
+            peerConnection.createOffer(sdpObserver, mediaConstraints);
+        } else {
+            peerConnectionData = prepareNewConnection();
+            peerConnectionData.createOffer(sdpObserver, mediaConstraints);
+        }
     }
 
     private void setOffer(final SessionDescription sdp) {
-        if (peerConnection != null) {
-            Log.e(TAG, "peer connection already exists");
+        if (isMeida()) {
+            if (peerConnection != null) {
+                Log.e(TAG, "peer connection already exists");
+            }
+            peerConnection = prepareNewConnection();
+            peerConnection.setRemoteDescription(sdpObserver, sdp);
+        } else {
+            if (peerConnectionData != null) {
+                Log.e(TAG, "peer connection for data already exists");
+            }
+            peerConnectionData = prepareNewConnection();
+            peerConnectionData.setRemoteDescription(sdpObserver, sdp);
         }
-        peerConnection = prepareNewConnection();
-        peerConnection.setRemoteDescription(sdpObserver, sdp);
     }
 
     private void sendAnswer() {
-        Log.i(TAG, "sending Answer. Creating remote session description...");
-        if (peerConnection == null) {
-            Log.e(TAG, "peerConnection NOT exist!");
-            return;
+        if (isMeida()) {
+            Log.i(TAG, "sending Answer. Creating remote session description...");
+            if (peerConnection == null) {
+                Log.e(TAG, "peerConnection NOT exist!");
+                return;
+            }
+            peerConnection.createAnswer(sdpObserver, mediaConstraints);
+        } else {
+            Log.i(TAG, "sending Answer. Creating remote session description...");
+            if (peerConnectionData == null) {
+                Log.e(TAG, "peerConnection NOT exist!");
+                return;
+            }
+            peerConnectionData.createAnswer(sdpObserver, mediaConstraints);
         }
-        peerConnection.createAnswer(sdpObserver, mediaConstraints);
     }
 
     private void setAnswer(final SessionDescription sdp) {
-        if (peerConnection == null) {
-            Log.e(TAG, "peerConnection NOT exist!");
-            return;
+        if (isMeida()) {
+            if (peerConnection == null) {
+                Log.e(TAG, "peerConnection NOT exist!");
+                return;
+            }
+            peerConnection.setRemoteDescription(sdpObserver, sdp);
+        } else {
+            if (peerConnectionData == null) {
+                Log.e(TAG, "peerConnection for Data NOT exist!");
+                return;
+            }
+            peerConnectionData.setRemoteDescription(sdpObserver, sdp);
         }
-        peerConnection.setRemoteDescription(sdpObserver, sdp);
     }
 
     private void sendDisconnect() {
@@ -474,25 +534,33 @@ public class MainActivity extends ActionBarActivity {
 
         @Override
         public void onCreateSuccess(SessionDescription sessionDescription) {
-            peerConnection.setLocalDescription(sdpObserver, sessionDescription);
-            Log.i(TAG, "Sending: SDP");
-            Log.i(TAG, "" + sessionDescription);
-            sendSDP(sessionDescription);
+            Log.i(TAG, "onCreateSuccess");
+            if (isMeida()) {
+                peerConnection.setLocalDescription(sdpObserver, sessionDescription);
+                Log.i(TAG, "Sending: SDP");
+                Log.i(TAG, "" + sessionDescription);
+                sendSDP(sessionDescription);
+            } else {
+                peerConnectionData.setLocalDescription(sdpObserver, sessionDescription);
+                Log.i(TAG, "Sending: SDP");
+                Log.i(TAG, "" + sessionDescription);
+                sendSDP(sessionDescription);
+            }
         }
 
         @Override
         public void onSetSuccess() {
-
+            Log.i(TAG, "onSetSuccess");
         }
 
         @Override
         public void onCreateFailure(String s) {
-
+            Log.i(TAG, "onCreateFailure");
         }
 
         @Override
         public void onSetFailure(String s) {
-
+            Log.i(TAG, "onSetFailure");
         }
     }
 
@@ -529,6 +597,7 @@ public class MainActivity extends ActionBarActivity {
                                 SessionDescription sdp = new SessionDescription(
                                         SessionDescription.Type.fromCanonicalForm(type),
                                         JSONsdp.getString("sdp"));
+                                offerType = JSONpayload.getString("type");
                                 connectionId = JSONpayload.getString("connectionId");
                                 onOffer(sdp);
 //                            } else if (type.equals("answer") && peerStarted) {
