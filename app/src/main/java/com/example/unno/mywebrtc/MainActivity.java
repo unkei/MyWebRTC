@@ -97,11 +97,6 @@ public class MainActivity extends ActionBarActivity {
             mToken = randomString();
         }
 
-        private String randomString() {
-            Random random = new Random();
-            return String.valueOf(random.nextInt(Integer.MAX_VALUE));
-        }
-
         public String getClientId() {
             return mClientId;
         }
@@ -149,6 +144,11 @@ public class MainActivity extends ActionBarActivity {
         }
     }
 
+    private static String randomString() {
+        Random random = new Random();
+        return String.valueOf(random.nextInt(Integer.MAX_VALUE));
+    }
+
     private String TAG = MainActivity.class.getSimpleName();
     private DrawingView drawingview;
     private GLSurfaceView glview;
@@ -164,7 +164,7 @@ public class MainActivity extends ActionBarActivity {
     private VideoRenderer renderer_sub;
     private DataChannel rtcDataChannel;
     private String roomName;
-    private String connectionId = "pc_abc";
+    private String connectionId = "mc_abc";
     private String offerType = "media";
     private boolean isMeida() { return "media".equals(offerType); }
     private final static String RTCDataChannelName = "RTCDataChannel";
@@ -406,6 +406,7 @@ public class MainActivity extends ActionBarActivity {
     private void connect() {
         if (!peerStarted) {
             offerType = "media";
+            connectionId = "mc_abc" + randomString();
             sendOffer();
             peerStarted = true;
         }
@@ -414,7 +415,7 @@ public class MainActivity extends ActionBarActivity {
     private void connectDataChannel() {
         if (peerStarted) {
             offerType = "data";
-            connectionId = "pc_abc";
+            connectionId = "dc_abc" + randomString();
             isInitiatedDC = true;
             sendOffer();
         }
