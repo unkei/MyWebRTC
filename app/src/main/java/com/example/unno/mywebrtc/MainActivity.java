@@ -10,6 +10,8 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 
 import org.apache.http.HttpResponse;
@@ -24,6 +26,7 @@ import org.java_websocket.client.WebSocketClient;
 
 import org.java_websocket.drafts.Draft_17;
 import org.java_websocket.handshake.ServerHandshake;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.webrtc.AudioSource;
@@ -50,6 +53,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import javax.net.ssl.SSLContext;
 
@@ -122,6 +127,15 @@ public class MainActivity extends ActionBarActivity {
             return builder.build().toString();
         }
 
+        public String getDiscoverIdsUri() {
+            Uri.Builder builder = new Uri.Builder();
+            builder.scheme(mSecure ? "https" : "http");
+            builder.encodedAuthority(mHost + ":" + mPort);
+            builder.path(mPath + mKey + "/peers");
+
+            return builder.build().toString();
+        }
+
         public String getWsServerUri() {
             Uri.Builder builder = new Uri.Builder();
             builder.scheme(mSecure ? "wss" : "ws");
@@ -136,6 +150,7 @@ public class MainActivity extends ActionBarActivity {
     }
 
     private String TAG = MainActivity.class.getSimpleName();
+    private DrawingView drawingview;
     private GLSurfaceView glview;
     private String VIDEO_TRACK_ID = TAG + "VIDEO";
     private String AUDIO_TRACK_ID = TAG + "AUDIO";
@@ -163,7 +178,7 @@ public class MainActivity extends ActionBarActivity {
         setContentView(R.layout.activity_main);
 
         wsOptions = new WsOptions();
-        getClientId(wsOptions, new ClientIdListener() {
+        getClientId(wsOptions, new HttpListener() {
             @Override
             public void onResponse(String clientId) {
                 wsOptions.setClientId(clientId);
@@ -186,6 +201,16 @@ public class MainActivity extends ActionBarActivity {
         AudioSource audioSource = peerConnectionFactory.createAudioSource(audioConstraints);
         localAudioTrack = peerConnectionFactory.createAudioTrack(AUDIO_TRACK_ID, audioSource);
 
+        drawingview = (DrawingView) findViewById(R.id.drawingview);
+        drawingview.setListener(new DrawingView.DrawingViewListener() {
+            @Override
+            public void onUpdated(Motion motion) {
+                if (rtcDataChannel != null) {
+                    DataChannel.Buffer buffer = new DataChannel.Buffer(motion.toBytes(), true);
+                    rtcDataChannel.send(buffer);
+                }
+            }
+        });
         glview = (GLSurfaceView) findViewById(R.id.glview);
         VideoRendererGui.setView(glview, null);
         try {
@@ -230,7 +255,8 @@ public class MainActivity extends ActionBarActivity {
         boolean ret = true;
         switch (id) {
             case R.id.action_call:
-                connect();
+                showCallDialog();
+//                connect();
                 break;
             case R.id.action_hangup:
                 hangUp();
@@ -238,12 +264,68 @@ public class MainActivity extends ActionBarActivity {
             case R.id.action_room:
                 showRoomDialog();
                 break;
+            case R.id.action_data:
+                connectDataChannel();
+                break;
             default:
                 ret = super.onOptionsItemSelected(item);
                 break;
         }
 
         return ret;
+    }
+
+    private void showCallDialog() {
+        AlertDialog.Builder builderSingle = new AlertDialog.Builder( MainActivity.this);
+//        builderSingle.setIcon(R.drawable.ic_launcher);
+        builderSingle.setTitle("Select One Name:-");
+        final ArrayAdapter<String> arrayAdapter = new ArrayAdapter<String>(
+                MainActivity.this,
+                android.R.layout.select_dialog_singlechoice);
+
+        discoverClientIds(wsOptions, new HttpListener() {
+            @Override
+            public void onResponse(String ids) {
+                try {
+                    if (ids != null) {
+                        JSONArray jsonArray = new JSONArray(ids);
+                        for (int i = 0; i < jsonArray.length(); i++) {
+                            String id = jsonArray.getString(i);
+                            if (!wsOptions.getClientId().equals(id)) {
+                                arrayAdapter.add(id);
+                            }
+                        }
+                        arrayAdapter.notifyDataSetChanged();
+                        Log.i(TAG, "ids:" + jsonArray);
+                    } else {
+                        Log.e(TAG, "id is null");
+                    }
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        builderSingle.setNegativeButton("cancel",
+                new DialogInterface.OnClickListener() {
+
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                    }
+                });
+
+        builderSingle.setAdapter(arrayAdapter,
+                new DialogInterface.OnClickListener() {
+
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        String id = arrayAdapter.getItem(which);
+                        wsOptions.setTargetId(id);
+                        connect();
+                    }
+                });
+        builderSingle.show();
     }
 
     private void showRoomDialog() {
@@ -286,6 +368,27 @@ public class MainActivity extends ActionBarActivity {
     private WebSocketClient mSocket;
     private URI wsServerUrl;
     private boolean peerStarted = false;
+    private boolean isInitiatedDC = false;
+
+    private DataChannel.Observer dataChannelObserver = new DataChannel.Observer() {
+        @Override
+        public void onStateChange() {
+            Log.i(TAG, "onStateChange");
+        }
+
+        @Override
+        public void onMessage(DataChannel.Buffer buffer) {
+            Log.i(TAG, "onMessage" + (buffer.binary ? "(Binary)" : "") + ":" + buffer.data.asCharBuffer());
+
+            final Motion motion = Motion.fromBytes(buffer.data);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    drawingview.handleMotion(motion);
+                }
+            });
+        }
+    };
 
     private void initWebRTC() {
         PeerConnectionFactory.initializeAndroidGlobals(this, true, true, true, VideoRendererGui.getEGLContext());
@@ -305,6 +408,15 @@ public class MainActivity extends ActionBarActivity {
             offerType = "media";
             sendOffer();
             peerStarted = true;
+        }
+    }
+
+    private void connectDataChannel() {
+        if (peerStarted) {
+            offerType = "data";
+            connectionId = "pc_abc";
+            isInitiatedDC = true;
+            sendOffer();
         }
     }
 
@@ -332,7 +444,7 @@ public class MainActivity extends ActionBarActivity {
 //        rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
 //        rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE;
 
-        PeerConnection peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, new MediaConstraints(), new PeerConnection.Observer() {
+        PeerConnection peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, pcConstraints, new PeerConnection.Observer() {
 
             @Override
             public void onSignalingChange(PeerConnection.SignalingState signalingState) {
@@ -400,17 +512,7 @@ public class MainActivity extends ActionBarActivity {
             public void onDataChannel(DataChannel dataChannel) {
                 Log.i(TAG, "onDataChannel: " + dataChannel.toString());
                 rtcDataChannel = dataChannel;
-                rtcDataChannel.registerObserver(new DataChannel.Observer() {
-                    @Override
-                    public void onStateChange() {
-                        Log.i(TAG, "onStateChange");
-                    }
-
-                    @Override
-                    public void onMessage(DataChannel.Buffer buffer) {
-                        Log.i(TAG, "onMessage" + (buffer.binary? "(Binary)": "") + ":" + buffer.data.asCharBuffer());
-                    }
-                });
+                rtcDataChannel.registerObserver(dataChannelObserver);
             }
 
             @Override
@@ -421,6 +523,11 @@ public class MainActivity extends ActionBarActivity {
 
         if (isMeida()) {
             peerConnection.addStream(mediaStream);
+        } else if (isInitiatedDC) {
+            DataChannel.Init init = new DataChannel.Init();
+            init.ordered = false;
+            rtcDataChannel = peerConnection.createDataChannel(RTCDataChannelName, init);
+            rtcDataChannel.registerObserver(dataChannelObserver);
         }
 
         return peerConnection;
@@ -458,6 +565,12 @@ public class MainActivity extends ActionBarActivity {
                 jsonPut(JSONsdp, "sdp", sdp.description);
             }
             jsonPut(JSONpayload, "sdp", JSONsdp);
+            if (!isMeida()) {
+                jsonPut(JSONpayload, "browser", "Chrome");
+                jsonPut(JSONpayload, "serialization", "binary");
+                jsonPut(JSONpayload, "reliable", "false");
+                jsonPut(JSONpayload, "label", RTCDataChannelName);
+            }
         }
         jsonPut(json, "payload", JSONpayload);
         sigSend(json);
@@ -530,6 +643,28 @@ public class MainActivity extends ActionBarActivity {
         sigSend(json);
     }
 
+    Timer keepAliveTimer = null;
+    private void resetKeepAliveTimer() {
+        Log.i(TAG, "resetKeepAliveTimer");
+        if (keepAliveTimer != null) {
+            keepAliveTimer.cancel();
+        }
+        keepAliveTimer = new Timer();
+        keepAliveTimer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                sendKeepAlive();
+            }
+        }, 50000);
+    }
+
+    private void sendKeepAlive() {
+        Log.i(TAG, "sendKeepAlive");
+        JSONObject json = new JSONObject();
+        jsonPut(json, "type", "KEEPALIVE");
+        sigSend(json);
+    }
+
     private class SDPObserver implements SdpObserver {
 
         @Override
@@ -574,11 +709,13 @@ public class MainActivity extends ActionBarActivity {
                 @Override
                 public void onOpen(ServerHandshake handshakedata) {
                     Log.d(TAG, "WebSocket connection opened to: " + wsServerUrl);
+                    resetKeepAliveTimer();
                     sigEnter();
                 }
 
                 @Override
                 public void onMessage(String message) {
+                    resetKeepAliveTimer();
                     try {
                         if (message.length() > 0) {
                             JSONObject json = new JSONObject(message);
@@ -638,6 +775,7 @@ public class MainActivity extends ActionBarActivity {
                 @Override
                 public void onClose(int code, String reason, boolean remote) {
                     Log.d(TAG, "WebSocket connection closed.");
+                    mSocket.connect();
                 }
 
                 @Override
@@ -676,6 +814,7 @@ public class MainActivity extends ActionBarActivity {
         jsonPut(jsonObject, "src", wsOptions.getClientId());
         jsonPut(jsonObject, "dst", wsOptions.getTargetId());
         mSocket.send(jsonObject.toString());
+        resetKeepAliveTimer();
     }
 
     // Put a |key|->|value| mapping in |json|.
@@ -687,11 +826,42 @@ public class MainActivity extends ActionBarActivity {
         }
     }
 
-    interface ClientIdListener {
-        void onResponse(String clientId);
+    interface HttpListener {
+        void onResponse(String result);
     }
 
-    private void getClientId(WsOptions opts, final ClientIdListener listener) {
+    private void discoverClientIds(WsOptions opts, final HttpListener listener) {
+
+        final HttpGet request = new HttpGet(opts.getDiscoverIdsUri());
+
+        final DefaultHttpClient httpClient = new DefaultHttpClient();
+
+        AsyncTask<Void, Void, String> task = new AsyncTask<Void, Void, String>() {
+            @Override
+            protected String doInBackground(Void... params) {
+                try {
+                    HttpResponse response = httpClient.execute(request);
+                    return EntityUtils.toString(response.getEntity());
+                } catch (ClientProtocolException e) {
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(String result) {
+                super.onPostExecute(result);
+                if (listener != null) {
+                    listener.onResponse(result);
+                }
+            }
+        };
+        task.execute();
+    }
+
+    private void getClientId(WsOptions opts, final HttpListener listener) {
 
         final HttpGet request = new HttpGet(opts.getClientIdUri());
 
