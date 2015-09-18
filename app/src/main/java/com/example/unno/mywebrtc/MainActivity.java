@@ -48,6 +48,7 @@ import org.webrtc.VideoTrack;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.ByteOrder;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -181,6 +182,7 @@ public class MainActivity extends ActionBarActivity {
         getClientId(wsOptions, new HttpListener() {
             @Override
             public void onResponse(String clientId) {
+                setTitle(clientId);
                 wsOptions.setClientId(clientId);
                 sigConnect(wsOptions);
             }
@@ -374,12 +376,14 @@ public class MainActivity extends ActionBarActivity {
         @Override
         public void onStateChange() {
             Log.i(TAG, "onStateChange");
+            drawingview.enableTouch(true);
         }
 
         @Override
         public void onMessage(DataChannel.Buffer buffer) {
             Log.i(TAG, "onMessage" + (buffer.binary ? "(Binary)" : "") + ":" + buffer.data.asCharBuffer());
 
+            buffer.data.order(ByteOrder.LITTLE_ENDIAN);
             final Motion motion = Motion.fromBytes(buffer.data);
             runOnUiThread(new Runnable() {
                 @Override
@@ -776,7 +780,6 @@ public class MainActivity extends ActionBarActivity {
                 @Override
                 public void onClose(int code, String reason, boolean remote) {
                     Log.d(TAG, "WebSocket connection closed.");
-                    mSocket.connect();
                 }
 
                 @Override

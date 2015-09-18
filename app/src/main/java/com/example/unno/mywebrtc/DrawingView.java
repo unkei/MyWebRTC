@@ -5,9 +5,14 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
+
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * Created by unno on 9/15/15.
@@ -23,13 +28,15 @@ public class DrawingView extends View {
     //drawing and canvas paint
     private Paint drawPaint, canvasPaint;
     //initial color
-    private int paintColor = 0xFF660000;
+    private int paintLocalColor = 0xFF660000;
+    private int paintRemoteColor = 0xFF000066;
     //canvas
     private Canvas drawCanvas;
     //canvas bitmap
     private Bitmap canvasBitmap;
 
     private DrawingViewListener mListener;
+    private boolean enableTouch = false;
 
     public DrawingView(Context context, AttributeSet attrs){
         super(context, attrs);
@@ -51,7 +58,7 @@ public class DrawingView extends View {
         drawPath = new Path();
         drawPaint = new Paint();
 
-        drawPaint.setColor(paintColor);
+        drawPaint.setColor(paintLocalColor);
 
         drawPaint.setAntiAlias(true);
         drawPaint.setStrokeWidth(20);
@@ -80,20 +87,32 @@ public class DrawingView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (!enableTouch) {
+            return super.onTouchEvent(event);
+        }
+
         int action = event.getAction();
         float touchX = event.getX();
         float touchY = event.getY();
 
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_UP) {
             Motion motion = new Motion(action, touchX, touchY);
-            handleMotion(motion);
+            handleMotion(motion, paintLocalColor);
             notifyListener(motion);
             return true;
         }
         return false;
     }
 
+    public void enableTouch(boolean enabled) {
+        enableTouch = enabled;
+    }
+
     public void handleMotion(Motion motion) {
+        handleMotion(motion, paintRemoteColor);
+    }
+
+    public void handleMotion(Motion motion, int color ) {
         if (motion == null) {
             return;
         }
@@ -101,6 +120,8 @@ public class DrawingView extends View {
         int action = motion.getAction();
         float touchX = motion.getTouchX();
         float touchY = motion.getTouchY();
+
+        drawPaint.setColor(color);
 
         switch (action) {
             case MotionEvent.ACTION_DOWN:
@@ -117,5 +138,30 @@ public class DrawingView extends View {
                 break;
         }
         invalidate();
+        resetClearTimer();
+    }
+
+    private void clearCanvas() {
+        this.post(new Runnable() {
+            @Override
+            public void run() {
+                drawCanvas.drawColor(0, PorterDuff.Mode.CLEAR);
+                invalidate();
+            }
+        });
+    }
+
+    Timer clearTimer = null;
+    private void resetClearTimer() {
+        if (clearTimer != null) {
+            clearTimer.cancel();
+        }
+        clearTimer = new Timer();
+        clearTimer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                clearCanvas();
+            }
+        }, 3000);
     }
 }
